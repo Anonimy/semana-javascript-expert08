@@ -3,19 +3,26 @@ export default class VideoProcessor {
 
   #webMWriter;
 
+  #service;
+
   #buffers = [];
 
   /**
    * @param {object} options
    * @param {import('./mp4Demuxer.js').default} options.mp4Demuxer
    * @param {import('../deps/webm-writer2.js').default} options.webMWriter
+   * @param {import('./service.js').default} options.service
    */
-  constructor({ mp4Demuxer, webMWriter }) {
+  constructor({ mp4Demuxer, webMWriter, service }) {
     this.#mp4Demuxer = mp4Demuxer;
     this.#webMWriter = webMWriter;
+    this.#service = service;
   }
 
-  /** @returns {ReadableStream} */
+  /**
+   * @param {ReadableStream<Uint8Array>} stream
+   * @returns {ReadableStream<Uint8Array>}
+   */
   mp4Decoder(stream) {
     return new ReadableStream({
       start: async (controller) => {
@@ -32,14 +39,14 @@ export default class VideoProcessor {
         this.#mp4Demuxer.run(stream, {
           /** @param {VideoDecoderConfig} config */
           async onConfig(config) {
-            const { supported } = await VideoDecoder.isConfigSupported(config);
-            if (!supported) {
-              const msg =
-                '[VideoProcessor::mp4Decoder] VideoDecoder not supported';
-              console.error(msg, config);
-              controller.error(msg);
-              return;
-            }
+            // const { supported } = await VideoDecoder.isConfigSupported(config);
+            // if (!supported) {
+            //   const msg =
+            //     '[VideoProcessor::mp4Decoder] VideoDecoder not supported';
+            //   console.error(msg, config);
+            //   controller.error(msg);
+            //   return;
+            // }
             decoder.configure(config);
           },
 
@@ -152,10 +159,16 @@ export default class VideoProcessor {
   upload(fileName, resolution, type) {
     const buffer = [];
     let byteCount = 0;
-    const triggerUpload = async (chunks) => {
-      const blob = new Blob(chunks, { type: `video/${type}` });
-      // TODO: actually upload
-      chunks.length = 0;
+    let segmentCount = 0;
+
+    const triggerUpload = async () => {
+      const blob = new Blob(buffer, { type: `video/${type}` });
+      await this.#service.uploadFile({
+        fileName: `${fileName}-${resolution}-${++segmentCount}.${type}`,
+        fileBuffer: blob,
+      });
+      buffer.length = 0;
+      byteCount = 0;
     };
 
     return new WritableStream({
@@ -168,11 +181,11 @@ export default class VideoProcessor {
         buffer.push(data);
         byteCount += data.byteLength;
         if (byteCount <= 10e6) return;
-        await triggerUpload(buffer);
+        await triggerUpload();
       },
       async close() {
-        if (chunks.length) {
-          await triggerUpload(buffer);
+        if (buffer.length) {
+          await triggerUpload();
         }
       },
     });
@@ -203,5 +216,6 @@ export default class VideoProcessor {
       // })
       // )
       .pipeTo(this.upload(fileName, '144p', 'webm'));
+    sendMessage({ status: 'done' });
   }
 }
